@@ -1,6 +1,7 @@
 package com.koushikdutta.async;
 
 import android.util.Log;
+
 import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.DataCallback;
 import com.koushikdutta.async.callback.WritableCallback;
@@ -80,7 +81,7 @@ public class AsyncNetworkSocket implements AsyncSocket {
             handleRemaining(list.remaining());
         }
         catch (IOException e) {
-            close();
+            closeInternal();
             reportEndPending(e);
             reportClose(e);
         }
@@ -121,7 +122,7 @@ public class AsyncNetworkSocket implements AsyncSocket {
             handleRemaining(b.remaining());
         }
         catch (IOException ex) {
-            close();
+            closeInternal();
             reportEndPending(ex);
             reportClose(ex);
         }
@@ -349,5 +350,9 @@ public class AsyncNetworkSocket implements AsyncSocket {
     
     public int getLocalPort() {
         return mChannel.getLocalPort();
+    }
+
+    public Object getSocket() {
+        return getChannel().getSocket();
     }
 }

@@ -1,6 +1,7 @@
 package com.koushikdutta.async.test;
 
 import android.os.Environment;
+import android.text.TextUtils;
 import android.util.Log;
 
 import com.koushikdutta.async.AsyncServer;
@@ -10,12 +11,9 @@ import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.DataCallback;
 import com.koushikdutta.async.future.Future;
 import com.koushikdutta.async.future.FutureCallback;
-import com.koushikdutta.async.http.AsyncHttpClient;
+import com.koushikdutta.async.http.*;
 import com.koushikdutta.async.http.AsyncHttpClient.DownloadCallback;
 import com.koushikdutta.async.http.AsyncHttpClient.StringCallback;
-import com.koushikdutta.async.http.AsyncHttpGet;
-import com.koushikdutta.async.http.AsyncHttpResponse;
-import com.koushikdutta.async.http.ResponseCacheMiddleware;
 import com.koushikdutta.async.http.callback.HttpConnectCallback;
 import com.koushikdutta.async.http.server.AsyncHttpServer;
 import com.koushikdutta.async.http.server.AsyncHttpServerRequest;
@@ -26,6 +24,7 @@ import junit.framework.Assert;
 import junit.framework.TestCase;
 
 import java.io.File;
+import java.net.URI;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
@@ -329,5 +328,17 @@ public class HttpClientTests extends TestCase {
         finally {
             proxyServer.stop();
         }
+    }
+
+    public void testUriPathWithSpaces() throws Exception {
+        AsyncHttpRequest request = new AsyncHttpRequest(URI.create("http://jpkc.seiee.sjtu.edu.cn/ds/ds2/Course%20lecture/chapter%2010.pdf"), AsyncHttpGet.METHOD);
+        String requestLine = request.getRequestLine().toString();
+        assertEquals("GET /ds/ds2/Course%20lecture/chapter%2010.pdf HTTP/1.1", requestLine);
+    }
+
+    public void testHEAD() throws Exception {
+        AsyncHttpHead req = new AsyncHttpHead(URI.create("http://31.media.tumblr.com/9606dcaa33b6877b7c485040393b9392/tumblr_mrtnysMonE1r4vl1yo1_500.jpg"));
+        Future<String> str = AsyncHttpClient.getDefaultInstance().execute(req, (StringCallback)null);
+        assertTrue(TextUtils.isEmpty(str.get(TIMEOUT, TimeUnit.MILLISECONDS)));
     }
 }
