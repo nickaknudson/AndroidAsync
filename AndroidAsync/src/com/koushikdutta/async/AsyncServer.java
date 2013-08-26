@@ -3,13 +3,12 @@ package com.koushikdutta.async;
 import android.os.Build;
 import android.os.Handler;
 import android.util.Log;
+
 import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.ConnectCallback;
 import com.koushikdutta.async.callback.ListenCallback;
 import com.koushikdutta.async.future.Cancellable;
 import com.koushikdutta.async.future.Future;
-import com.koushikdutta.async.future.FutureCallback;
-import com.koushikdutta.async.future.SimpleCancellable;
 import com.koushikdutta.async.future.SimpleFuture;
 import com.koushikdutta.async.future.TransformFuture;
 
@@ -17,13 +16,15 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.channels.*;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.ClosedSelectorException;
+import java.nio.channels.DatagramChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.nio.channels.spi.SelectorProvider;
-import java.util.Comparator;
-import java.util.Hashtable;
 import java.util.LinkedList;
-import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
@@ -363,6 +364,11 @@ public class AsyncServer {
                     key.attach(handler);
                     handler.onListening(new AsyncServerSocket() {
                         @Override
+                        public int getLocalPort() {
+                            return server.socket().getLocalPort();
+                        }
+
+                        @Override
                         public void stop() {
                             try {
                                 server.close();
@@ -567,7 +573,7 @@ public class AsyncServer {
 
     private boolean addMe() {
         synchronized (mServers) {
-            AsyncServer current = mServers.get(Thread.currentThread());
+            AsyncServer current = mServers.get(mAffinity);
             if (current != null) {
 //                Log.e(LOGTAG, "****AsyncServer already running on this thread.****");
                 return false;

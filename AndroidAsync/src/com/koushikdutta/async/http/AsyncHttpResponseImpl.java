@@ -1,7 +1,14 @@
 package com.koushikdutta.async.http;
 
-import com.koushikdutta.async.*;
+import com.koushikdutta.async.AsyncServer;
+import com.koushikdutta.async.AsyncSocket;
+import com.koushikdutta.async.ByteBufferList;
+import com.koushikdutta.async.DataEmitter;
+import com.koushikdutta.async.DataSink;
+import com.koushikdutta.async.FilteredDataEmitter;
+import com.koushikdutta.async.LineEmitter;
 import com.koushikdutta.async.LineEmitter.StringCallback;
+import com.koushikdutta.async.NullDataCallback;
 import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.WritableCallback;
 import com.koushikdutta.async.http.filter.ChunkedOutputFilter;
@@ -16,7 +23,12 @@ abstract class AsyncHttpResponseImpl extends FilteredDataEmitter implements Asyn
     public AsyncSocket getSocket() {
         return mSocket;
     }
-    
+
+    @Override
+    public AsyncHttpRequest getRequest() {
+        return mRequest;
+    }
+
     void setSocket(AsyncSocket exchange) {
         mSocket = exchange;
         
@@ -48,17 +60,30 @@ abstract class AsyncHttpResponseImpl extends FilteredDataEmitter implements Asyn
         });
 
         String rs = mRequest.getRequestString();
+        mRequest.logv(rs);
         com.koushikdutta.async.Util.writeAll(exchange, rs.getBytes(), new CompletedCallback() {
             @Override
             public void onCompleted(Exception ex) {
-                if (mWriter != null)
-                    mWriter.write(mRequest, AsyncHttpResponseImpl.this);
+                if (mWriter != null) {
+                    mWriter.write(mRequest, AsyncHttpResponseImpl.this, new CompletedCallback() {
+                        @Override
+                        public void onCompleted(Exception ex) {
+                            onRequestCompleted(ex);
+                        }
+                    });
+                }
+                else {
+                    onRequestCompleted(null);
+                }
             }
         });
 
         LineEmitter liner = new LineEmitter();
         exchange.setDataCallback(liner);
         liner.setLineCallback(mHeaderCallback);
+    }
+
+    protected void onRequestCompleted(Exception ex) {
     }
     
     private CompletedCallback mReporter = new CompletedCallback() {
@@ -92,7 +117,15 @@ abstract class AsyncHttpResponseImpl extends FilteredDataEmitter implements Asyn
                     // socket may get detached after headers (websocket)
                     if (mSocket == null)
                         return;
-                    DataEmitter emitter = HttpUtil.getBodyDecoder(mSocket, mRawHeaders, false);
+                    DataEmitter emitter;
+                    // HEAD requests must not return any data. They still may
+                    // return content length, etc, which will confuse the body decoder
+                    if (AsyncHttpHead.METHOD.equalsIgnoreCase(mRequest.getMethod())) {
+                        emitter = HttpUtil.EndEmitter.create(getServer(), null);
+                    }
+                    else {
+                        emitter = HttpUtil.getBodyDecoder(mSocket, mRawHeaders, false);
+                    }
                     setDataEmitter(emitter);
                 }
             }
@@ -161,6 +194,7 @@ abstract class AsyncHttpResponseImpl extends FilteredDataEmitter implements Asyn
 
     @Override
     public void end() {
+
         write(ByteBuffer.wrap(new byte[0]));
     }
 
