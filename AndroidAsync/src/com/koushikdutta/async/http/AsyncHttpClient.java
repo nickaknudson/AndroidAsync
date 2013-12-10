@@ -1,6 +1,8 @@
 package com.koushikdutta.async.http;
 
+import android.net.Uri;
 import android.os.Handler;
+import android.text.TextUtils;
 
 import com.koushikdutta.async.AsyncSSLException;
 import com.koushikdutta.async.AsyncServer;
@@ -20,10 +22,12 @@ import com.koushikdutta.async.http.callback.RequestCallback;
 import com.koushikdutta.async.http.libcore.RawHeaders;
 import com.koushikdutta.async.parser.AsyncParser;
 import com.koushikdutta.async.parser.ByteBufferListParser;
+import com.koushikdutta.async.parser.JSONArrayParser;
 import com.koushikdutta.async.parser.JSONObjectParser;
 import com.koushikdutta.async.parser.StringParser;
 import com.koushikdutta.async.stream.OutputStreamDataCallback;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedOutputStream;
@@ -34,6 +38,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.concurrent.TimeoutException;
 
@@ -238,15 +243,28 @@ public class AsyncHttpClient {
                         super.setDataEmitter(data.bodyEmitter);
 
                         RawHeaders headers = mHeaders.getHeaders();
-                        if ((headers.getResponseCode() == HttpURLConnection.HTTP_MOVED_PERM || headers.getResponseCode() == HttpURLConnection.HTTP_MOVED_TEMP) && request.getFollowRedirect()) {
-                            URI redirect = URI.create(headers.get("Location"));
+                        int responseCode = headers.getResponseCode();
+                        if ((responseCode == HttpURLConnection.HTTP_MOVED_PERM || responseCode == HttpURLConnection.HTTP_MOVED_TEMP || responseCode == 307) && request.getFollowRedirect()) {
+                            String location = headers.get("Location");
+                            URI redirect = URI.create(location);
                             if (redirect == null || redirect.getScheme() == null) {
-                                redirect = URI.create(uri.toString().substring(0, uri.toString().length() - uri.getPath().length()) + headers.get("Location"));
+                                try {
+                                    redirect = new URL(uri.toURL(), location).toURI();
+                                }
+                                catch (Exception e) {
+                                    reportConnectedCompleted(cancel, e, this, request, callback);
+                                    return;
+                                }
                             }
-                            AsyncHttpRequest newReq = new AsyncHttpRequest(redirect, request.getMethod());
+                            AsyncHttpRequest newReq = new AsyncHttpRequest(redirect, AsyncHttpGet.METHOD);
                             newReq.executionTime = request.executionTime;
                             newReq.logLevel = request.logLevel;
                             newReq.LOGTAG = request.LOGTAG;
+                            newReq.proxyHost = request.proxyHost;
+                            newReq.proxyPort = request.proxyPort;
+                            String userAgent = request.getHeaders().getHeaders().get("User-Agent");
+                            if (!TextUtils.isEmpty(userAgent))
+                                newReq.getHeaders().getHeaders().set("User-Agent", userAgent);
                             request.logi("Redirecting");
                             newReq.logi("Redirected");
                             execute(newReq, redirectCount + 1, cancel, callback);
@@ -255,7 +273,7 @@ public class AsyncHttpClient {
                             return;
                         }
 
-                        request.logv("Final (post cache response) headers: " + mHeaders.getHeaders().toHeaderString());
+                        request.logv("Final (post cache response) headers:\n" + mHeaders.getHeaders().toHeaderString());
 
                         // at this point the headers are done being modified
                         reportConnectedCompleted(cancel, null, this, request, callback);
@@ -271,7 +289,7 @@ public class AsyncHttpClient {
                                 mServer.removeAllCallbacks(cancel.scheduled);
 
                             // allow the middleware to massage the headers before the body is decoded
-                            request.logv("Received headers: " + mHeaders.getHeaders().toHeaderString());
+                            request.logv("Received headers:\n" + mHeaders.getHeaders().toHeaderString());
 
                             data.headers = mHeaders;
                             synchronized (mMiddleware) {
@@ -291,6 +309,8 @@ public class AsyncHttpClient {
 
                     @Override
                     protected void report(Exception ex) {
+                        if (ex != null)
+                            request.loge("exception during response", ex);
                         if (cancel.isCancelled())
                             return;
                         if (ex instanceof AsyncSSLException) {
@@ -375,6 +395,9 @@ public class AsyncHttpClient {
 
     public static abstract class JSONObjectCallback extends RequestCallbackBase<JSONObject> {
     }
+    
+    public static abstract class JSONArrayCallback extends RequestCallbackBase<JSONArray> {
+    }
 
     public static abstract class FileCallback extends RequestCallbackBase<File> {
     }
@@ -439,6 +462,29 @@ public class AsyncHttpClient {
     }
     public Future<JSONObject> executeJSONObject(AsyncHttpRequest req, final JSONObjectCallback callback) {
         return execute(req, new JSONObjectParser(), callback);
+    }
+
+    @Deprecated
+    public Future<JSONArray> get(String uri, final JSONArrayCallback callback) {
+        return executeJSONArray(new AsyncHttpGet(uri), callback);
+    }
+    @Deprecated
+    public Future<JSONArray> execute(AsyncHttpRequest req, final JSONArrayCallback callback) {
+        return executeJSONArray(req, callback);
+    }
+
+    public Future<JSONArray> getJSONArray(String uri) {
+        return getJSONArray(uri, null);
+    }
+    public Future<JSONArray> getJSONArray(String uri, final JSONArrayCallback callback) {
+        return executeJSONArray(new AsyncHttpGet(uri), callback);
+    }
+
+    public Future<JSONArray> executeJSONArray(AsyncHttpRequest req) {
+        return executeJSONArray(req, null);
+    }
+    public Future<JSONArray> executeJSONArray(AsyncHttpRequest req, final JSONArrayCallback callback) {
+        return execute(req, new JSONArrayParser(), callback);
     }
 
     private <T> void invokeWithAffinity(final RequestCallback<T> callback, SimpleFuture<T> future, final AsyncHttpResponse response, final Exception e, final T result) {
@@ -644,7 +690,7 @@ public class AsyncHttpClient {
     }
 
     public Future<WebSocket> websocket(String uri, String protocol, final WebSocketConnectCallback callback) {
-        assert callback != null;
+//        assert callback != null;
         final AsyncHttpGet get = new AsyncHttpGet(uri.replace("ws://", "http://").replace("wss://", "https://"));
         return websocket(get, protocol, callback);
     }

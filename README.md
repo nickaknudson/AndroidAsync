@@ -65,7 +65,23 @@ AsyncHttpClient.getDefaultInstance().getJSONObject(url, new AsyncHttpClient.JSON
 });
 ```
 
+Or for JSONArrays...
 
+```java
+// url is the URL to download. The callback will be invoked on the UI thread
+// once the download is complete.
+AsyncHttpClient.getDefaultInstance().getJSONArray(url, new AsyncHttpClient.JSONArrayCallback() {
+    // Callback is invoked with any exceptions/errors, and the result, if available.
+    @Override
+    public void onCompleted(Exception e, AsyncHttpResponse response, JSONArray result) {
+        if (e != null) {
+            e.printStackTrace();
+            return;
+        }
+        System.out.println("I got a JSONArray: " + result);
+    }
+});
+```
 
 
 ### Download a url to a file
@@ -127,7 +143,7 @@ AsyncHttpClient.getDefaultInstance().websocket(get, "my-protocol", new WebSocket
 ### AndroidAsync also supports socket.io
 
 ```java
-SocketIOClient.connect(AsyncHttpClient.getDefaultInstance(), "http://192.168.1.2:3000", new SocketIOConnectCallback() {
+SocketIOClient.connect(AsyncHttpClient.getDefaultInstance(), "http://192.168.1.2:3000", new ConnectCallback() {
     @Override
     public void onConnectCompleted(Exception ex, SocketIOClient client) {
         if (ex != null) {

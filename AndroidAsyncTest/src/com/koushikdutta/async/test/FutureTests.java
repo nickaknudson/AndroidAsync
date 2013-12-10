@@ -398,4 +398,35 @@ public class FutureTests extends TestCase {
         // trigger.get will do a reentrant block.
         assertEquals((int)trigger.get(5000, TimeUnit.MILLISECONDS), 2020);
     }
+
+    public void testPostCancelCallback() throws Exception {
+        SimpleFuture<String> future = new SimpleFuture<String>();
+        final Semaphore semaphore = new Semaphore(0);
+        future.cancel();
+        future.setCallback(new FutureCallback<String>() {
+            @Override
+            public void onCompleted(Exception e, String result) {
+                assertTrue(e instanceof CancellationException);
+                semaphore.release();
+            }
+        });
+        assertTrue(semaphore.tryAcquire(1000, TimeUnit.MILLISECONDS));
+        assertNull(future.getCallback());
+    }
+
+    public void testPreCancelCallback() throws Exception {
+        final Semaphore semaphore = new Semaphore(0);
+        SimpleFuture<String> future = new SimpleFuture<String>();
+        future.setCallback(new FutureCallback<String>() {
+            @Override
+            public void onCompleted(Exception e, String result) {
+                assertTrue(e instanceof CancellationException);
+                semaphore.release();
+            }
+        });
+        assertNotNull(future.getCallback());
+        future.cancel();
+        assertTrue(semaphore.tryAcquire(1000, TimeUnit.MILLISECONDS));
+        assertNull(future.getCallback());
+    }
 }

@@ -6,6 +6,7 @@ import java.security.MessageDigest;
 import java.util.LinkedList;
 import java.util.UUID;
 
+import android.text.TextUtils;
 import android.util.Base64;
 
 import com.koushikdutta.async.AsyncServer;
@@ -70,7 +71,7 @@ public class WebSocketImpl implements WebSocket {
             pending = null;
     }
 
-    private void setupParser(boolean masking) {
+    private void setupParser(boolean masking, boolean deflate) {
         mParser = new HybiParser(mSocket) {
             @Override
             protected void report(Exception ex) {
@@ -99,6 +100,7 @@ public class WebSocketImpl implements WebSocket {
             }
         };
         mParser.setMasking(masking);
+        mParser.setDeflate(deflate);
         if (mSocket.isPaused())
             mSocket.resume();
     }
@@ -117,11 +119,15 @@ public class WebSocketImpl implements WebSocket {
         response.getHeaders().getHeaders().set("Upgrade", "WebSocket");
         response.getHeaders().getHeaders().set("Connection", "Upgrade");
         response.getHeaders().getHeaders().set("Sec-WebSocket-Accept", sha1);
+        String protocol = request.getHeaders().getHeaders().get("Sec-WebSocket-Protocol");
+        // match the protocol (sanity checking and enforcement is done in the caller)
+        if (!TextUtils.isEmpty(protocol))
+            response.getHeaders().getHeaders().set("Sec-WebSocket-Protocol", protocol);
 //        if (origin != null)
 //            response.getHeaders().getHeaders().set("Access-Control-Allow-Origin", "http://" + origin);
         response.writeHead();
         
-        setupParser(false);
+        setupParser(false, false);
     }
     
     public static void addWebSocketUpgradeHeaders(AsyncHttpRequest req, String protocol) {
@@ -129,6 +135,7 @@ public class WebSocketImpl implements WebSocket {
         final String key = Base64.encodeToString(toByteArray(UUID.randomUUID()),Base64.NO_WRAP);
         headers.set("Sec-WebSocket-Version", "13");
         headers.set("Sec-WebSocket-Key", key);
+        headers.set("Sec-WebSocket-Extensions", "x-webkit-deflate-frame");
         headers.set("Connection", "Upgrade");
         headers.set("Upgrade", "websocket");
         if (protocol != null)
@@ -161,9 +168,19 @@ public class WebSocketImpl implements WebSocket {
         String expected = SHA1(concat).trim();
         if (!sha1.equalsIgnoreCase(expected))
             return null;
+        String extensions = requestHeaders.get("Sec-WebSocket-Extensions");
+        boolean deflate = false;
+        if (extensions != null) {
+            if (extensions.equals("x-webkit-deflate-frame"))
+                deflate = true;
+            // is this right? do we want to crap out here? Commenting out
+            // as I suspect this caused a regression.
+//            else
+//                return null;
+        }
 
         WebSocketImpl ret = new WebSocketImpl(response.detachSocket());
-        ret.setupParser(true);
+        ret.setupParser(true, deflate);
         return ret;
     }
     

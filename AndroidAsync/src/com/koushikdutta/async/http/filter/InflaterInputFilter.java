@@ -11,11 +11,11 @@ import java.util.zip.Inflater;
 
 public class InflaterInputFilter extends FilteredDataEmitter {
     private Inflater mInflater;
-    
+
     @Override
     protected void report(Exception e) {
         if (e != null && mInflater.getRemaining() > 0) {
-            e = new IOException("data still remaining in inflater");
+            e = new Exception("data still remaining in inflater", e);
         }
         super.report(e);
     }

@@ -52,8 +52,8 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
     private static final int VERSION = 201105;
     private static final int ENTRY_METADATA = 0;
     private static final int ENTRY_BODY = 1;
-    private static final int ENTRY_COUNT = 2;
-    private AsyncHttpClient client;
+    public static final int ENTRY_COUNT = 2;
+    private AsyncServer server;
 
     public static final String SERVED_FROM = "X-Served-From";
     public static final String CONDITIONAL_CACHE = "conditional-cache";
@@ -71,15 +71,19 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
         }
         ResponseCacheMiddleware ret = new ResponseCacheMiddleware();
         ret.size = size;
-        ret.client = client;
+        ret.server = client.getServer();
         ret.cacheDir = cacheDir;
         ret.open();
         client.insertMiddleware(ret);
         return ret;
     }
-    
+
     private void open() throws IOException {
         cache = DiskLruCache.open(cacheDir, VERSION, ENTRY_COUNT, size);
+    }
+
+    public DiskLruCache getDiskLruCache() {
+        return cache;
     }
     
     boolean caching = true;
@@ -91,10 +95,14 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
         return caching;
     }
 
-    private static String uriToKey(URI uri) {
+    public static String uriToKey(URI uri) {
+        return toKeyString(uri.toString());
+    }
+
+    public static String toKeyString(String string) {
         try {
             MessageDigest messageDigest = MessageDigest.getInstance("MD5");
-            byte[] md5bytes = messageDigest.digest(uri.toString().getBytes());
+            byte[] md5bytes = messageDigest.digest(string.toString().getBytes());
             return new BigInteger(1, md5bytes).toString(16);
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
@@ -170,6 +178,7 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
                 assert buffer.position() == 0;
                 DataInputStream din = new DataInputStream(cacheResponse.getBody());
                 din.readFully(buffer.array(), buffer.arrayOffset(), (int)contentLength);
+                buffer.limit((int)contentLength);
                 pending.add(buffer);
                 com.koushikdutta.async.Util.emitAllData(CachedSocket.this, pending);
                 assert din.read() == -1;
@@ -246,7 +255,7 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
 
         @Override
         public AsyncServer getServer() {
-            return client.getServer();
+            return server;
         }
     }
     
@@ -341,7 +350,7 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
             rawResponseHeaders.set("Content-Length", String.valueOf(contentLength));
             socket.pending.add(ByteBuffer.wrap(rawResponseHeaders.toHeaderString().getBytes()));
 
-            client.getServer().post(new Runnable() {
+            server.post(new Runnable() {
                 @Override
                 public void run() {
                     data.connectCallback.onConnectCompleted(null, socket);
@@ -478,6 +487,7 @@ public class ResponseCacheMiddleware extends SimpleMiddleware {
                 assert buffer.position() == 0;
                 DataInputStream din = new DataInputStream(cacheResponse.getBody());
                 din.readFully(buffer.array(), buffer.arrayOffset(), (int)contentLength);
+                buffer.limit((int)contentLength);
                 pending.add(buffer);
                 com.koushikdutta.async.Util.emitAllData(this, pending);
                 assert din.read() == -1;

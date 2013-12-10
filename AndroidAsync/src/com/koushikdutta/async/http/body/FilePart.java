@@ -1,13 +1,13 @@
-package com.koushikdutta.async.http;
+package com.koushikdutta.async.http.body;
+
+import org.apache.http.NameValuePair;
+import org.apache.http.message.BasicNameValuePair;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
-
-import org.apache.http.NameValuePair;
-import org.apache.http.message.BasicNameValuePair;
 
 public class FilePart extends StreamPart {
     File file;
@@ -17,9 +17,9 @@ public class FilePart extends StreamPart {
                 add(new BasicNameValuePair("filename", file.getName()));
             }
         });
-        
+
 //        getRawHeaders().set("Content-Type", "application/xml");
-        
+
         this.file = file;
     }
 

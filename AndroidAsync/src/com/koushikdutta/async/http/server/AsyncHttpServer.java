@@ -1,6 +1,7 @@
 package com.koushikdutta.async.http.server;
 
 import android.content.Context;
+import android.text.TextUtils;
 
 import com.koushikdutta.async.AsyncSSLSocketWrapper;
 import com.koushikdutta.async.AsyncServer;
@@ -14,6 +15,7 @@ import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.ListenCallback;
 import com.koushikdutta.async.http.AsyncHttpGet;
 import com.koushikdutta.async.http.AsyncHttpPost;
+import com.koushikdutta.async.http.HttpUtil;
 import com.koushikdutta.async.http.Multimap;
 import com.koushikdutta.async.http.WebSocket;
 import com.koushikdutta.async.http.WebSocketImpl;
@@ -148,13 +150,19 @@ public class AsyncHttpServer {
                     handleOnCompleted();
 
                     if (getBody().readFullyOnRequest()) {
-                        match.callback.onRequest(this, res);
+                        if (match != null)
+                            match.callback.onRequest(this, res);
                     }
                 }
                 
                 private void handleOnCompleted() {
                     if (requestComplete && responseComplete) {
-                        onAccepted(socket);
+                        if (HttpUtil.isKeepAlive(getHeaders().getHeaders())) {
+                            onAccepted(socket);
+                        }
+                        else {
+                            socket.close();
+                        }
                     }
                 }
 
@@ -259,6 +267,10 @@ public class AsyncHttpServer {
     }
 
     public void websocket(String regex, final WebSocketRequestCallback callback) {
+        websocket(regex, null, callback);
+    }
+
+    public void websocket(String regex, final String protocol, final WebSocketRequestCallback callback) {
         get(regex, new HttpServerRequestCallback() {
             @Override
             public void onRequest(final AsyncHttpServerRequest request, final AsyncHttpServerResponse response) {
@@ -274,6 +286,12 @@ public class AsyncHttpServer {
                     }
                 }
                 if (!"websocket".equalsIgnoreCase(request.getHeaders().getHeaders().get("Upgrade")) || !hasUpgrade) {
+                    response.responseCode(404);
+                    response.end();
+                    return;
+                }
+                String peerProtocol = request.getHeaders().getHeaders().get("Sec-WebSocket-Protocol");
+                if (!TextUtils.equals(protocol, peerProtocol)) {
                     response.responseCode(404);
                     response.end();
                     return;
@@ -318,9 +336,18 @@ public class AsyncHttpServer {
         mContentTypes.put("html", "text/html");
         mContentTypes.put("css", "text/css");
         mContentTypes.put("mp4", "video/mp4");
+        mContentTypes.put("mov", "video/quicktime");
+        mContentTypes.put("wmv", "video/x-ms-wmv");
     }
-    
+
     public static String getContentType(String path) {
+        String type = tryGetContentType(path);
+        if (type != null)
+            return type;
+        return "text/plain";
+    }
+
+    public static String tryGetContentType(String path) {
         int index = path.lastIndexOf(".");
         if (index != -1) {
             String e = path.substring(index + 1);
@@ -328,16 +355,16 @@ public class AsyncHttpServer {
             if (ct != null)
                 return ct;
         }
-        return "text/plain";
+        return null;
     }
 
-    public void directory(Context _context, String regex, final String assetPath) {
-        final Context context = _context.getApplicationContext();
+    public void directory(Context context, String regex, final String assetPath) {
+        final Context _context = context.getApplicationContext();
         addAction("GET", regex, new HttpServerRequestCallback() {
             @Override
             public void onRequest(AsyncHttpServerRequest request, final AsyncHttpServerResponse response) {
                 String path = request.getMatcher().replaceAll("");
-                InputStream is = getAssetStream(context, assetPath + path);
+                InputStream is = getAssetStream(_context, assetPath + path);
                 if (is == null) {
                     response.responseCode(404);
                     response.end();
@@ -420,6 +447,8 @@ public class AsyncHttpServer {
         mCodes.put(200, "OK");
         mCodes.put(206, "Partial Content");
         mCodes.put(101, "Switching Protocols");
+        mCodes.put(301, "Moved Permanently");
+        mCodes.put(302, "Found");
         mCodes.put(404, "Not Found");
     }
     

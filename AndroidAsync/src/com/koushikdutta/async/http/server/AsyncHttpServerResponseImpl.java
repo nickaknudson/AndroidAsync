@@ -2,18 +2,25 @@ package com.koushikdutta.async.http.server;
 
 import android.text.TextUtils;
 
-import com.koushikdutta.async.*;
+import com.koushikdutta.async.AsyncServer;
+import com.koushikdutta.async.AsyncSocket;
+import com.koushikdutta.async.BufferedDataSink;
+import com.koushikdutta.async.ByteBufferList;
+import com.koushikdutta.async.DataSink;
+import com.koushikdutta.async.Util;
 import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.WritableCallback;
+import com.koushikdutta.async.http.AsyncHttpHead;
+import com.koushikdutta.async.http.HttpUtil;
 import com.koushikdutta.async.http.filter.ChunkedOutputFilter;
 import com.koushikdutta.async.http.libcore.RawHeaders;
 import com.koushikdutta.async.http.libcore.ResponseHeaders;
+
 import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
+import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
 
@@ -36,7 +43,8 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
     AsyncHttpServerResponseImpl(AsyncSocket socket, AsyncHttpServerRequestImpl req) {
         mSocket = socket;
         mRequest = req;
-        mRawHeaders.set("Connection", "Keep-Alive");
+        if (HttpUtil.isKeepAlive(req.getHeaders().getHeaders()))
+            mRawHeaders.set("Connection", "Keep-Alive");
     }
     
     @Override
@@ -79,14 +87,24 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
 
         mHasWritten = true;
         assert null != mRawHeaders.getStatusLine();
+        String currentEncoding = mRawHeaders.get("Transfer-Encoding");
+        if ("".equals(currentEncoding))
+            mRawHeaders.removeAll("Transfer-Encoding");
+        boolean canUseChunked = ("Chunked".equalsIgnoreCase(currentEncoding) || currentEncoding == null)
+           && !"close".equalsIgnoreCase(mRawHeaders.get("Connection"));
         if (mContentLength < 0) {
+            String contentLength = mRawHeaders.get("Content-Length");
+            if (!TextUtils.isEmpty(contentLength))
+                mContentLength = Integer.valueOf(contentLength);
+        }
+        if (mContentLength < 0 && canUseChunked) {
             mRawHeaders.set("Transfer-Encoding", "Chunked");
             mSink = new ChunkedOutputFilter(mSocket);
         }
         else {
             mSink = mSocket;
         }
-        writeHead();
+        writeHeadInternal();
     }
 
     @Override
@@ -103,27 +121,37 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
 
     @Override
     public void end() {
-        if (null == mRawHeaders.get("Transfer-Encoding") && !mHasWritten) {
-            send("text/html", "");
+        if ("Chunked".equalsIgnoreCase(mRawHeaders.get("Transfer-Encoding"))) {
+            initFirstWrite();
+            ((ChunkedOutputFilter)mSink).setMaxBuffer(Integer.MAX_VALUE);
+            mSink.write(new ByteBufferList());
             onEnd();
-            return;
         }
-        initFirstWrite();
-
-        ((ChunkedOutputFilter)mSink).setMaxBuffer(Integer.MAX_VALUE);
-        mSink.write(new ByteBufferList());
-
-        onEnd();
+        else if (!mHasWritten) {
+            if (!mRequest.getMethod().equalsIgnoreCase(AsyncHttpHead.METHOD))
+                send("text/html", "");
+            else
+                onEnd();
+        }
     }
 
     private boolean mHeadWritten = false;
     @Override
     public void writeHead() {
+        initFirstWrite();
+    }
+
+    private void writeHeadInternal() {
         assert !mHeadWritten;
         mHeadWritten = true;
         Util.writeAll(mSocket, mRawHeaders.toHeaderString().getBytes(), new CompletedCallback() {
             @Override
             public void onCompleted(Exception ex) {
+                // TODO: HACK!!!
+                // this really needs to be fixed. Not sure how to deal w/ writehead and
+                // first write
+                if (mSink instanceof BufferedDataSink)
+                    ((BufferedDataSink)mSink).setDataSink(mSocket);
                 WritableCallback writableCallback = getWriteableCallback();
                 if (writableCallback != null)
                     writableCallback.onWriteable();
@@ -136,7 +164,7 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
         assert !mHeadWritten;
         mRawHeaders.set("Content-Type", contentType);
     }
-    
+
     public void send(String contentType, final String string) {
         try {
             if (mRawHeaders.getStatusLine() == null)
@@ -178,10 +206,11 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
     public void send(JSONObject json) {
         send("application/json; charset=utf8", json.toString());
     }
-    
-    public void sendFile(File file) {
+
+    @Override
+    public void sendStream(InputStream inputStream, int totalLength) {
         int start = 0;
-        int end = (int)file.length();
+        int end = totalLength - 1;
 
         String range = mRequest.getHeaders().getHeaders().get("Range");
         if (range != null) {
@@ -201,13 +230,15 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
                     start = Integer.parseInt(parts[0]);
                 if (parts.length == 2 && !TextUtils.isEmpty(parts[1]))
                     end = Integer.parseInt(parts[1]);
-                else if (start != 0)
-                    end = (int)file.length();
                 else
-                    end = Math.min((int)file.length(), start + 50000);
+                    end = totalLength - 1;
+//                else if (start != 0)
+//                    end = (int)file.length() - 1;
+//                else
+//                    end = Math.min((int)file.length() - 1, 50000);
 
                 responseCode(206);
-                getHeaders().getHeaders().set("Content-Range", String.format("bytes %d-%d/%d", start, end - 1, file.length()));
+                getHeaders().getHeaders().set("Content-Range", String.format("bytes %d-%d/%d", start, end, totalLength));
             }
             catch (Exception e) {
                 responseCode(416);
@@ -216,20 +247,38 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
             }
         }
         try {
-            FileInputStream fin = new FileInputStream(file);
-            if (start != fin.skip(start))
+            if (start != inputStream.skip(start))
                 throw new Exception("skip failed to skip requested amount");
-            mRawHeaders.set("Content-Type", AsyncHttpServer.getContentType(file.getAbsolutePath()));
-            mContentLength = end - start;
+            mContentLength = end - start + 1;
             mRawHeaders.set("Content-Length", "" + mContentLength);
+            mRawHeaders.set("Accept-Ranges", "bytes");
             if (getHeaders().getHeaders().getStatusLine() == null)
                 responseCode(200);
-            Util.pump(fin, end - start, this, new CompletedCallback() {
+            if (mRequest.getMethod().equals(AsyncHttpHead.METHOD)) {
+                writeHead();
+                onEnd();
+                return;
+            }
+            Util.pump(inputStream, mContentLength, this, new CompletedCallback() {
                 @Override
                 public void onCompleted(Exception ex) {
                     onEnd();
                 }
             });
+        }
+        catch (Exception e) {
+            responseCode(404);
+            end();
+        }
+    }
+
+    @Override
+    public void sendFile(File file) {
+        try {
+            if (mRawHeaders.get("Content-Type") == null)
+                mRawHeaders.set("Content-Type", AsyncHttpServer.getContentType(file.getAbsolutePath()));
+            FileInputStream fin = new FileInputStream(file);
+            sendStream(fin, (int) file.length());
         }
         catch (Exception e) {
             responseCode(404);

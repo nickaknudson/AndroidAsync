@@ -11,6 +11,7 @@ import com.koushikdutta.async.LineEmitter.StringCallback;
 import com.koushikdutta.async.NullDataCallback;
 import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.WritableCallback;
+import com.koushikdutta.async.http.body.AsyncHttpRequestBody;
 import com.koushikdutta.async.http.filter.ChunkedOutputFilter;
 import com.koushikdutta.async.http.libcore.RawHeaders;
 import com.koushikdutta.async.http.libcore.ResponseHeaders;
@@ -37,8 +38,9 @@ abstract class AsyncHttpResponseImpl extends FilteredDataEmitter implements Asyn
 
         mWriter = mRequest.getBody();
         if (mWriter != null) {
-            mRequest.getHeaders().setContentType(mWriter.getContentType());
-            if (mWriter.length() != -1) {
+            if (mRequest.getHeaders().getContentType() == null)
+                mRequest.getHeaders().setContentType(mWriter.getContentType());
+            if (mWriter.length() > 0) {
                 mRequest.getHeaders().setContentLength(mWriter.length());
                 mSink = mSocket;
             }
@@ -60,7 +62,7 @@ abstract class AsyncHttpResponseImpl extends FilteredDataEmitter implements Asyn
         });
 
         String rs = mRequest.getRequestString();
-        mRequest.logv(rs);
+        mRequest.logv("\n" + rs);
         com.koushikdutta.async.Util.writeAll(exchange, rs.getBytes(), new CompletedCallback() {
             @Override
             public void onCompleted(Exception ex) {

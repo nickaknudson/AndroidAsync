@@ -55,7 +55,8 @@ class SocketIOConnection {
     }
 
     public void connect(SocketIOClient client) {
-        clients.add(client);
+        if (!clients.contains(client))
+            clients.add(client);
         webSocket.send(String.format("1::%s", client.endpoint));
     }
 
@@ -74,11 +75,11 @@ class SocketIOConnection {
             }
         }
 
-        if (needsEndpointDisconnect)
+        if (needsEndpointDisconnect && webSocket != null)
             webSocket.send(String.format("0::%s", client.endpoint));
 
         // and see if we can disconnect the socket completely
-        if (clients.size() > 0)
+        if (clients.size() > 0 || webSocket == null)
             return;
 
         webSocket.setStringCallback(null);
@@ -124,8 +125,7 @@ class SocketIOConnection {
 
                 final String sessionUrl = request.getUri().toString() + "websocket/" + session + "/";
 
-                httpClient.websocket(sessionUrl, null, null)
-                .setCallback(getCompletionCallback());
+                setComplete(httpClient.websocket(sessionUrl, null, null));
             }
         })
         .setCallback(new FutureCallback<WebSocket>() {

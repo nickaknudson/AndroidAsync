@@ -11,7 +11,8 @@ import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.WritableCallback;
 
 public class OutputStreamDataSink implements DataSink {
-    public OutputStreamDataSink() {
+    public OutputStreamDataSink(AsyncServer server) {
+        this(server, null);
     }
 
     @Override
@@ -19,7 +20,15 @@ public class OutputStreamDataSink implements DataSink {
         close();
     }
 
-    public OutputStreamDataSink(OutputStream stream) {
+    public OutputStreamDataSink(AsyncServer server, OutputStream stream) {
+        this(server, stream, false);
+    }
+
+    AsyncServer server;
+    boolean blocking;
+    public OutputStreamDataSink(AsyncServer server, OutputStream stream, boolean blocking) {
+        this.server = server;
+        this.blocking = blocking;
         setOutputStream(stream);
     }
 
@@ -31,9 +40,93 @@ public class OutputStreamDataSink implements DataSink {
     public OutputStream getOutputStream() {
         return mStream;
     }
-    
+
+    private boolean doPending() {
+        try {
+            while (pending.size() > 0) {
+                ByteBuffer b;
+                synchronized (pending) {
+                    b = pending.remove();
+                }
+                int rem = b.remaining();
+                mStream.write(b.array(), b.arrayOffset() + b.position(), b.remaining());
+                totalWritten += rem;
+                ByteBufferList.reclaim(b);
+            }
+            return true;
+        }
+        catch (Exception e) {
+            pending.recycle();
+            closeReported = true;
+            closeException = e;
+            return false;
+        }
+    }
+
+    final ByteBufferList pending = new ByteBufferList();
+    Runnable backgrounder;
+    int totalWritten;
+    private void doBackground() {
+        assert getServer().getAffinity() == Thread.currentThread();
+
+        if (backgrounder != null)
+            return;
+        backgrounder = new Runnable() {
+            @Override
+            public void run() {
+                if (!doPending())
+                    return;
+
+                // once we're done, post back and try to do some more data.
+                getServer().post(new Runnable() {
+                    @Override
+                    public void run() {
+                        backgrounder = null;
+                        if (outputStreamCallback != null && !pending.hasRemaining())
+                            outputStreamCallback.onWriteable();
+
+                        if (closeReported && !pending.hasRemaining()) {
+                            if (mClosedCallback != null)
+                                mClosedCallback.onCompleted(closeException);
+                            return;
+                        }
+
+                        doBackground();
+                    }
+                });
+            }
+        };
+        getServer().getExecutorService().execute(backgrounder);
+    }
+
     @Override
-    public void write(ByteBuffer bb) {
+    public void write(final ByteBuffer bb) {
+        if (getServer().getAffinity() != Thread.currentThread() && blocking) {
+            getServer().run(new Runnable() {
+                @Override
+                public void run() {
+                    write(bb);
+                }
+            });
+            return;
+        }
+
+        if (blocking) {
+            // tune this number.
+            // doesn't need to be locked.
+            // background thread posts back on completion to recheck and retrigger.
+            if (pending.remaining() > 256 * 1024)
+                return;
+            ByteBuffer dup = ByteBufferList.obtain(bb.remaining());
+            dup.put(bb);
+            dup.flip();
+            synchronized (pending) {
+                pending.add(dup);
+            }
+            doBackground();
+            return;
+        }
+
         try {
             mStream.write(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining());
         }
@@ -45,7 +138,30 @@ public class OutputStreamDataSink implements DataSink {
     }
 
     @Override
-    public void write(ByteBufferList bb) {
+    public void write(final ByteBufferList bb) {
+        if (getServer().getAffinity() != Thread.currentThread() && blocking) {
+            getServer().run(new Runnable() {
+                @Override
+                public void run() {
+                    write(bb);
+                }
+            });
+            return;
+        }
+
+        if (blocking) {
+            // tune this number.
+            // doesn't need to be locked.
+            // background thread posts back on completion to recheck and retrigger.
+            if (pending.remaining() > 256 * 1024)
+                return;
+            synchronized (pending) {
+                bb.get(pending);
+            }
+            doBackground();
+            return;
+        }
+
         try {
             while (bb.size() > 0) {
                 ByteBuffer b = bb.remove();
@@ -90,12 +206,24 @@ public class OutputStreamDataSink implements DataSink {
     }
 
     boolean closeReported;
+    Exception closeException;
     public void reportClose(Exception ex) {
         if (closeReported)
             return;
         closeReported = true;
+        closeException = ex;
+        if (blocking) {
+            getServer().post(new Runnable() {
+                @Override
+                public void run() {
+                    doBackground();
+                }
+            });
+            return;
+        }
+
         if (mClosedCallback != null)
-            mClosedCallback.onCompleted(ex);
+            mClosedCallback.onCompleted(closeException);
     }
     
     CompletedCallback mClosedCallback;
@@ -111,6 +239,11 @@ public class OutputStreamDataSink implements DataSink {
 
     @Override
     public AsyncServer getServer() {
-        return AsyncServer.getDefault();
+        return server;
+    }
+
+    WritableCallback outputStreamCallback;
+    public void setOutputStreamWritableCallback(WritableCallback outputStreamCallback) {
+        this.outputStreamCallback = outputStreamCallback;
     }
 }

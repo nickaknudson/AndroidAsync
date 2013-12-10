@@ -50,40 +50,59 @@ public class InputStreamDataEmitter implements DataEmitter {
     @Override
     public void resume() {
         paused = false;
+        doResume();
     }
 
-    private void report(Exception e) {
-        try {
-            inputStream.close();
-        }
-        catch (Exception ex) {
-            e = ex;
-        }
-        if (endCallback != null)
-            endCallback.onCompleted(e);
+    private void report(final Exception e) {
+        getServer().post(new Runnable() {
+            @Override
+            public void run() {
+                Exception ex = e;
+                try {
+                    inputStream.close();
+                }
+                catch (Exception e) {
+                    ex = e;
+                }
+                if (endCallback != null)
+                    endCallback.onCompleted(ex);
+            }
+        });
     }
 
+    int mToAlloc = 0;
     ByteBufferList pending = new ByteBufferList();
     Runnable pumper = new Runnable() {
         @Override
         public void run() {
             try {
                 if (!pending.isEmpty()) {
-                    Util.emitAllData(InputStreamDataEmitter.this, pending);
+                    getServer().run(new Runnable() {
+                        @Override
+                        public void run() {
+                            Util.emitAllData(InputStreamDataEmitter.this, pending);
+                        }
+                    });
                     if (!pending.isEmpty())
                         return;
                 }
                 ByteBuffer b;
                 do {
-                    b = ByteBufferList.obtain(8192);
+                    b = ByteBufferList.obtain(Math.min(Math.max(mToAlloc, 2 << 11), 256 * 1024));
                     int read;
                     if (-1 == (read = inputStream.read(b.array()))) {
                         report(null);
                         return;
                     }
+                    mToAlloc = read * 2;
                     b.limit(read);
                     pending.add(b);
-                    Util.emitAllData(InputStreamDataEmitter.this, pending);
+                    getServer().run(new Runnable() {
+                        @Override
+                        public void run() {
+                            Util.emitAllData(InputStreamDataEmitter.this, pending);
+                        }
+                    });
                 }
                 while (pending.remaining() == 0 && !isPaused());
             }
@@ -94,7 +113,7 @@ public class InputStreamDataEmitter implements DataEmitter {
     };
 
     private void doResume() {
-        server.post(pumper);
+        server.getExecutorService().execute(pumper);
     }
 
     @Override
