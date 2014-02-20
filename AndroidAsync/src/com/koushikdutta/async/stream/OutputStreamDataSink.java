@@ -20,15 +20,9 @@ public class OutputStreamDataSink implements DataSink {
         close();
     }
 
-    public OutputStreamDataSink(AsyncServer server, OutputStream stream) {
-        this(server, stream, false);
-    }
-
     AsyncServer server;
-    boolean blocking;
-    public OutputStreamDataSink(AsyncServer server, OutputStream stream, boolean blocking) {
+    public OutputStreamDataSink(AsyncServer server, OutputStream stream) {
         this.server = server;
-        this.blocking = blocking;
         setOutputStream(stream);
     }
 
@@ -37,7 +31,7 @@ public class OutputStreamDataSink implements DataSink {
         mStream = stream;
     }
     
-    public OutputStream getOutputStream() {
+    public OutputStream getOutputStream() throws IOException {
         return mStream;
     }
 
@@ -49,7 +43,7 @@ public class OutputStreamDataSink implements DataSink {
                     b = pending.remove();
                 }
                 int rem = b.remaining();
-                mStream.write(b.array(), b.arrayOffset() + b.position(), b.remaining());
+                getOutputStream().write(b.array(), b.arrayOffset() + b.position(), b.remaining());
                 totalWritten += rem;
                 ByteBufferList.reclaim(b);
             }
@@ -64,71 +58,12 @@ public class OutputStreamDataSink implements DataSink {
     }
 
     final ByteBufferList pending = new ByteBufferList();
-    Runnable backgrounder;
     int totalWritten;
-    private void doBackground() {
-        assert getServer().getAffinity() == Thread.currentThread();
-
-        if (backgrounder != null)
-            return;
-        backgrounder = new Runnable() {
-            @Override
-            public void run() {
-                if (!doPending())
-                    return;
-
-                // once we're done, post back and try to do some more data.
-                getServer().post(new Runnable() {
-                    @Override
-                    public void run() {
-                        backgrounder = null;
-                        if (outputStreamCallback != null && !pending.hasRemaining())
-                            outputStreamCallback.onWriteable();
-
-                        if (closeReported && !pending.hasRemaining()) {
-                            if (mClosedCallback != null)
-                                mClosedCallback.onCompleted(closeException);
-                            return;
-                        }
-
-                        doBackground();
-                    }
-                });
-            }
-        };
-        getServer().getExecutorService().execute(backgrounder);
-    }
 
     @Override
     public void write(final ByteBuffer bb) {
-        if (getServer().getAffinity() != Thread.currentThread() && blocking) {
-            getServer().run(new Runnable() {
-                @Override
-                public void run() {
-                    write(bb);
-                }
-            });
-            return;
-        }
-
-        if (blocking) {
-            // tune this number.
-            // doesn't need to be locked.
-            // background thread posts back on completion to recheck and retrigger.
-            if (pending.remaining() > 256 * 1024)
-                return;
-            ByteBuffer dup = ByteBufferList.obtain(bb.remaining());
-            dup.put(bb);
-            dup.flip();
-            synchronized (pending) {
-                pending.add(dup);
-            }
-            doBackground();
-            return;
-        }
-
         try {
-            mStream.write(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining());
+            getOutputStream().write(bb.array(), bb.arrayOffset() + bb.position(), bb.remaining());
         }
         catch (IOException e) {
             reportClose(e);
@@ -139,33 +74,10 @@ public class OutputStreamDataSink implements DataSink {
 
     @Override
     public void write(final ByteBufferList bb) {
-        if (getServer().getAffinity() != Thread.currentThread() && blocking) {
-            getServer().run(new Runnable() {
-                @Override
-                public void run() {
-                    write(bb);
-                }
-            });
-            return;
-        }
-
-        if (blocking) {
-            // tune this number.
-            // doesn't need to be locked.
-            // background thread posts back on completion to recheck and retrigger.
-            if (pending.remaining() > 256 * 1024)
-                return;
-            synchronized (pending) {
-                bb.get(pending);
-            }
-            doBackground();
-            return;
-        }
-
         try {
             while (bb.size() > 0) {
                 ByteBuffer b = bb.remove();
-                mStream.write(b.array(), b.arrayOffset() + b.position(), b.remaining());
+                getOutputStream().write(b.array(), b.arrayOffset() + b.position(), b.remaining());
                 ByteBufferList.reclaim(b);
             }
         }
@@ -212,15 +124,6 @@ public class OutputStreamDataSink implements DataSink {
             return;
         closeReported = true;
         closeException = ex;
-        if (blocking) {
-            getServer().post(new Runnable() {
-                @Override
-                public void run() {
-                    doBackground();
-                }
-            });
-            return;
-        }
 
         if (mClosedCallback != null)
             mClosedCallback.onCompleted(closeException);

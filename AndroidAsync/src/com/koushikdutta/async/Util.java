@@ -18,10 +18,16 @@ public class Util {
         DataCallback handler = null;
         while (!emitter.isPaused() && (handler = emitter.getDataCallback()) != null && (remaining = list.remaining()) > 0) {
             handler.onDataAvailable(emitter, list);
-            if (remaining == list.remaining() && handler == emitter.getDataCallback()) {
-                // not all the data was consumed...
+            if (remaining == list.remaining() && handler == emitter.getDataCallback() && !emitter.isPaused()) {
+                // this is generally indicative of failure...
+
+                // 1) The data callback has not changed
+                // 2) no data was consumed
+                // 3) the data emitter was not paused
+
                 // call byteBufferList.recycle() or read all the data to prevent this assertion.
                 // this is nice to have, as it identifies protocol or parsing errors.
+
 //                System.out.println("Data: " + list.peekString());
                 System.out.println("handler: " + handler);
                 assert false;
@@ -36,7 +42,7 @@ public class Util {
             System.out.println("handler: " + handler);
             System.out.println("emitter: " + emitter);
             assert false;
-            throw new RuntimeException("mDataHandler failed to consume data, yet remains the mDataHandler.");
+            throw new RuntimeException("Not all data was consumed by Util.emitAllData");
         }
     }
 
@@ -44,7 +50,7 @@ public class Util {
         pump(is, Integer.MAX_VALUE, ds, callback);
     }
 
-    public static void pump(final InputStream is, final int max, final DataSink ds, final CompletedCallback callback) {
+    public static void pump(final InputStream is, final long max, final DataSink ds, final CompletedCallback callback) {
         final CompletedCallback wrapper = new CompletedCallback() {
             boolean reported;
             @Override
@@ -82,8 +88,8 @@ public class Util {
                             ByteBufferList.reclaim(pending);
                             pending = ByteBufferList.obtain(Math.min(Math.max(mToAlloc, 2 << 11), maxAlloc));
 
-                            int toRead = Math.min(max - totalRead, pending.capacity());
-                            int read = is.read(pending.array(), 0, toRead);
+                            long toRead = Math.min(max - totalRead, pending.capacity());
+                            int read = is.read(pending.array(), 0, (int)toRead);
                             if (read == -1 || totalRead == max) {
                                 cleanup();
                                 wrapper.onCompleted(null);
