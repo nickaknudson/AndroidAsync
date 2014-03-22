@@ -16,7 +16,6 @@ import com.koushikdutta.async.future.TransformFuture;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Hashtable;
 
@@ -225,7 +224,11 @@ public class AsyncSocketMiddleware extends SimpleMiddleware {
                             mClient.getServer().connectSocket(new InetSocketAddress(address, port), wrapCallback(new ConnectCallback() {
                                 @Override
                                 public void onConnectCompleted(Exception ex, AsyncSocket socket) {
-                                    assert !isDone();
+                                    if (isDone()) {
+                                        lastException = new Exception("internal error during connect");
+                                        next.onCompleted(null);
+                                        return;
+                                    }
 
                                     // try the next address
                                     if (ex != null) {
